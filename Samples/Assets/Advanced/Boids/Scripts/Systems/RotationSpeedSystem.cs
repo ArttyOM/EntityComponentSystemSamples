@@ -6,6 +6,10 @@ using Unity.Mathematics;
 using Unity.Transforms;
 using UnityEngine;
 
+/// <summary>
+/// походу, не используется, т.к. в сцене с рыбками нет сущностей с компонентом RotationSpeed
+/// TODO = попробовать закомментировать
+/// </summary>
 public class RotationSpeedSystem : JobComponentSystem
 {
     [BurstCompile]

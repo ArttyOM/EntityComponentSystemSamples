@@ -7,8 +7,16 @@ using Unity.Transforms;
 
 namespace Samples.Common
 {
+    /// <summary>
+    /// Heading-компонент есть только у рыбешек
+    /// Другие системы меняют направление heading, а эта выставляет конкретный rotation, такой, чтобы рыбешка всегда ровно плавала
+    /// </summary>
     public class HeadingSystem : JobComponentSystem
     {
+        /// <summary>
+        /// Каждый кадр делает ничего - это с виду так.
+        /// Другие системы меняют направление heading, а эта выставляет конкретный rotation, такой, чтобы рыбешка всегда ровно плавала
+        /// </summary>
         [BurstCompile]
         struct RotationFromHeading : IJobProcessComponentData<Heading, Rotation>
         {
