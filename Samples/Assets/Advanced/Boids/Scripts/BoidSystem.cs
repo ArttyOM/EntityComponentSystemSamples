@@ -10,13 +10,19 @@ using Samples.Common;
 
 namespace Samples.Boids
 {
+    /// <summary>
+    /// Самая сложная система в проекте
+    /// </summary>
     public class BoidSystem : JobComponentSystem
     {
-        private ComponentGroup  m_BoidGroup;
-        private ComponentGroup  m_TargetGroup;
-        private ComponentGroup  m_ObstacleGroup;
+        //поля ComponentGroup проходят инициализацию в OnManagerStarted
+        //TODO - разобраться, метод вызывается до или после спавна рыбешек
+        //(чтобы понять, это постоянные рантайм-фильтры, либо все же конкретные компоненты единоразово туда попадают)
+        private ComponentGroup  m_BoidGroup; //коллекция компонентов рыбешек
+        private ComponentGroup  m_TargetGroup;//коллекция компонентов "ведущих"
+        private ComponentGroup  m_ObstacleGroup; //коллекция акул
 
-        private List<Boid>      m_UniqueTypes = new List<Boid>(10);
+        private List<Boid>      m_UniqueTypes = new List<Boid>(10);//так, почему 10?
         private List<PrevCells> m_PrevCells   = new List<PrevCells>();
 
         struct PrevCells
@@ -33,46 +39,92 @@ namespace Samples.Boids
             public NativeArray<int>             cellCount;
         }
 
+        /// <summary>
+        /// в этот раз использован другой тип фильтра походу - через атрибут
+        /// фильтруем по компоненту рыбешек и позиции
+        /// позиции из float3 переводим в int (с помощью Hash) и храним в коллекции
+        ///
+        /// Интересно, почему мы не кешируем позиции акул и Ведущих?
+        /// </summary>
         [BurstCompile]
         [RequireComponentTag(typeof(Boid))]
-        struct HashPositions : IJobProcessComponentDataWithEntity<Position>
+        struct HashPositions : IJobProcessComponentDataWithEntity<Position>///обожаю километровые имена интерфейсов
         {
             public NativeMultiHashMap<int, int>.Concurrent hashMap;
-            public float                                   cellRadius;
+            public float cellRadius;
 
             public void Execute(Entity entity, int index, [ReadOnly]ref Position position)
             {
                 var hash = GridHash.Hash(position.Value, cellRadius);
-                hashMap.Add(hash, index);            }
+                //закодированные координаты, в которых находится сущность
+                hashMap.Add(hash, index);//добавляем закодированные координаты рыбешки в коллекцию
+            }
         }
 
         [BurstCompile]
-        struct MergeCells : IJobNativeMultiHashMapMergedSharedKeyIndices
+        struct MergeCells : IJobNativeMultiHashMapMergedSharedKeyIndices //даже имена интерфейсов страшно читать
         {
+            ///массив ID клеток
             public NativeArray<int>                 cellIndices;
+            ///массив направлений рыбок
             public NativeArray<Heading>             cellAlignment;
+            ///"разделение" ячеек, хз пока, что под этим подразумевается
             public NativeArray<Position>            cellSeparation;
+            ///индексы клеток, на которых есть акула
             public NativeArray<int>                 cellObstaclePositionIndex;
+            ///массив дистанций до акул
             public NativeArray<float>               cellObstacleDistance;
+            ///ID ячеек, на которых находятся Ведущие
             public NativeArray<int>                 cellTargetPistionIndex;
-            public NativeArray<int>                 cellCount;
-            [ReadOnly] public NativeArray<Position> targetPositions;
-            [ReadOnly] public NativeArray<Position> obstaclePositions;
+            ///количество ячеек - почему-то в коллекции.
+            public NativeArray<int>                 cellCount; 
+            [ReadOnly] public NativeArray<Position> targetPositions; //массив позиций Ведущих
+            [ReadOnly] public NativeArray<Position> obstaclePositions; //массив позиций Акул
 
+            /// <summary>
+            /// void - походу для оптимальной работы BurstCompile
+            /// TODO - переделать с void NearestPosition (* ,out int, out float ) на (int, float) NearestPosition
+            /// заценим функционал кортежей свежего C# как бонус
+            /// </summary>
+            /// <param name="targets">массив позиций Ведущих</param>
+            /// <param name="position">позиция рыбешки, вызвавшая метод</param>
+            /// <param name="nearestPositionIndex">первое возвращаемое значение - ID ближайшей позиции</param>
+            /// <param name="nearestDistance">второе возвращаемое значение -</param>
             void NearestPosition(NativeArray<Position> targets, float3 position, out int nearestPositionIndex, out float nearestDistance )
             {
                 nearestPositionIndex = 0;
                 nearestDistance      = math.lengthsq(position-targets[0].Value);
+                //записали сюда квадрат длины расстояния между позицией рыбешки и позицией 0го ведущего
+                //пока что 0й ведущий считается ближайшим
+
+                //цикл для каждого таргета (кроме id 0) считает расстояние до рыбешки
+                //сравнивает его с текущим минимальным, если оказывается меньше - замещает
+                //что примечательно - для "если" не используется IF - вероятно, чтобы BurstCompile скушал
                 for (int i = 1; i < targets.Length; i++)
                 {
-                    var targetPosition = targets[i].Value;
-                    var distance       = math.lengthsq(position-targetPosition);
+                    //var targetPosition = targets[i].Value; //по мнению разрабов это повышает читабельность, наверное
+                    //var distance       = math.lengthsq(position-targetPosition);
+
+                    //переделал под себя
+                    //считаем квадрат длины
+                    var distance = math.lengthsq(position - targets[i].Value);
+
+                    ///классический код выглядел бы так:
+                    //if (distance < nearestDistance
+                    //{
+                    //nearestDistance = distance;
+                    //nearestPostitionIndex = i;
+                    //}
+                    //но у нас-то BustCompile-дружелюбный...
                     var nearest        = distance < nearestDistance;
 
                     nearestDistance      = math.select(nearestDistance, distance, nearest);
                     nearestPositionIndex = math.select(nearestPositionIndex, i, nearest);
                 }
-                nearestDistance = math.sqrt(nearestDistance);
+                nearestDistance = math.sqrt(nearestDistance);//т.к. мы брали квадрат дистанции - теперь берем корень.
+                //мне не шибко нравится реализация:
+                //1) изначально мы "испачкали" выходные значения, и потом их правили. Лучше бы задействовали их только в конце функции
+                //2) а смысл вообще работать с реальной длиной, а не с квадратом длины? Взятие корня так-то не экономная операция
             }
 
             public void ExecuteFirst(int index)
@@ -120,7 +172,7 @@ namespace Samples.Boids
 
             public void Execute(Entity entity, int index, [ReadOnly]ref Position position, ref Heading heading)
             {
-                var forward                           = heading.Value;
+                var forward                           = heading.Value; 
                 var currentPosition                   = position.Value;
                 var cellIndex                         = cellIndices[index];
                 var neighborCount                     = cellCount[cellIndex];
@@ -285,18 +337,37 @@ namespace Samples.Boids
             return inputDeps;
         }
 
+        /// <summary>
+        /// начинаем мы отсюда
+        /// </summary>
         protected override void OnCreateManager()
         {
+            //кешируем сущности, содержащие одновременно Boid, Poistion, Heading
+            //т.е. всх рыбешек
+            //я чуть-чуть другие методы использовал. По-моему, на Generic-ах читабельнее
             m_BoidGroup = GetComponentGroup(
-                ComponentType.ReadOnly(typeof(Boid)),
+                /*ComponentType.ReadOnly(typeof(Boid)),
                 ComponentType.ReadOnly(typeof(Position)),
-                typeof(Heading));
+                typeof(Heading));*/
+                ComponentType.ReadOnly<Boid>(),
+                ComponentType.ReadOnly<Position>(),
+                ComponentType.ReadOnly<Heading>()
+                );
+
+            ///тоже самое, но фильтруем Ведущих
             m_TargetGroup = GetComponentGroup(
+                /*
                 ComponentType.ReadOnly(typeof(BoidTarget)),
-                ComponentType.ReadOnly(typeof(Position)));
+                ComponentType.ReadOnly(typeof(Position))*/
+                ComponentType.ReadOnly<BoidTarget>(),
+                ComponentType.ReadOnly<Position>()
+                );
+
+            /// и Акул
             m_ObstacleGroup = GetComponentGroup(
-                ComponentType.ReadOnly(typeof(BoidObstacle)),
-                ComponentType.ReadOnly(typeof(Position)));
+                ComponentType.ReadOnly<BoidObstacle>(),//(typeof(BoidObstacle)),
+                ComponentType.ReadOnly<Position>()
+                );//(typeof(Position)));
         }
     }
 }
