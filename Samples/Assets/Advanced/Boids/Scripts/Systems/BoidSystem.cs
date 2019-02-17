@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
@@ -346,28 +346,17 @@ namespace Samples.Boids
             //т.е. всх рыбешек
             //я чуть-чуть другие методы использовал. По-моему, на Generic-ах читабельнее
             m_BoidGroup = GetComponentGroup(
-                /*ComponentType.ReadOnly(typeof(Boid)),
+                ComponentType.ReadOnly(typeof(Boid)),
                 ComponentType.ReadOnly(typeof(Position)),
-                typeof(Heading));*/
-                ComponentType.ReadOnly<Boid>(),
-                ComponentType.ReadOnly<Position>(),
-                ComponentType.ReadOnly<Heading>()
-                );
-
+                typeof(Heading));
             ///тоже самое, но фильтруем Ведущих
             m_TargetGroup = GetComponentGroup(
-                /*
                 ComponentType.ReadOnly(typeof(BoidTarget)),
-                ComponentType.ReadOnly(typeof(Position))*/
-                ComponentType.ReadOnly<BoidTarget>(),
-                ComponentType.ReadOnly<Position>()
-                );
-
+                ComponentType.ReadOnly(typeof(Position)));
             /// и Акул
             m_ObstacleGroup = GetComponentGroup(
-                ComponentType.ReadOnly<BoidObstacle>(),//(typeof(BoidObstacle)),
-                ComponentType.ReadOnly<Position>()
-                );//(typeof(Position)));
+                ComponentType.ReadOnly(typeof(BoidObstacle)),
+                ComponentType.ReadOnly(typeof(Position)));
         }
     }
 }
