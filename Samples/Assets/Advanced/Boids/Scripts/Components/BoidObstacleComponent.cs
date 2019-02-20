@@ -1,6 +1,11 @@
 using System;
 using Unity.Entities;
 
+/// <summary>
+/// Компонент - препятствие для рыбешек
+/// в конкретном случае - акула
+/// Просто тег.
+/// </summary>
 [Serializable]
 public struct BoidObstacle : IComponentData { }
 

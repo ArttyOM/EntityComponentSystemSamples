@@ -1,6 +1,9 @@
 ﻿using System;
 using Unity.Entities;
 
+/// <summary>
+/// Ненужный компонент
+/// </summary>
 [Serializable]
 public struct RotationSpeed : IComponentData
 {

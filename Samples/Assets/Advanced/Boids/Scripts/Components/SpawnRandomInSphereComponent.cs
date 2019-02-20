@@ -2,6 +2,14 @@
 using Unity.Entities;
 using UnityEngine;
 
+/// <summary>
+/// компонент, отвечающий за генерацию рыбешек
+/// Под капотом:
+/// GameObject префаб-образец рыбешки - кого спавнить
+/// float радиус сферы, в пределах которой происходит генерация.
+/// Центр сферы - данные из компонента позиции порождающей сущности
+/// int количество - сколько нужно сгенерировать
+/// </summary>
 [Serializable]
 public struct SpawnRandomInSphere : ISharedComponentData
 {

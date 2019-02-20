@@ -1,6 +1,10 @@
 ﻿using System;
 using Unity.Entities;
 
+/// <summary>
+/// Компонент, отвечающий за случайное начальное направление взгляда
+/// Под капотом: Просто тег.
+/// </summary>
 [Serializable]
 public struct RandomInitialHeading : IComponentData { }
 
