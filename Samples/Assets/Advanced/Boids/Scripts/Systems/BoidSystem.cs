@@ -56,8 +56,8 @@ namespace Samples.Boids
         [RequireComponentTag(typeof(Boid))]
         struct HashPositions : IJobProcessComponentDataWithEntity<Position>///обожаю километровые имена интерфейсов
         {
-            public NativeMultiHashMap<int, int>.Concurrent hashMap;
-            public float cellRadius;
+            public NativeMultiHashMap<int, int>.Concurrent hashMap; //передаем по факту при создании Job
+            public float cellRadius;//передаем по факту при создании Job
 
             public void Execute(Entity entity, int index, [ReadOnly]ref Position position)
             {
@@ -226,6 +226,11 @@ namespace Samples.Boids
             m_PrevCells.Clear();
         }
 
+        /// <summary>
+        /// каждый кадр
+        /// </summary>
+        /// <param name="inputDeps"></param>
+        /// <returns></returns>
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
             EntityManager.GetAllUniqueSharedComponentData(m_UniqueTypes);//типа подгружаем все возможные типы рыбок
@@ -295,18 +300,18 @@ namespace Samples.Boids
                     cellCount                 = cellCount//не инициализирован
                 };
 
+                //Debug.Log("i =" + i + " cacheIndex=" + cacheIndex + " m_PrevCells.Count-1 =" + (m_PrevCells.Count - 1));
+
                 //Имеем сравнение i-1 с 0-1, i при этом на первом входе =1 и инкрементируется
-                //Лучше бы i начинали с 0, на мой взгляд - это во-первых
-                //а во-вторых - m_PrevCells.Add вызывается только здесь, cacheIndex только инкрементирует
-                //=> cacheIndex всегда больше m_PrevCells.Count-1,
-                //else никогда не выполнится (TODO - проверить)
+                //Лучше бы i начинали с 0, на мой взгляд
                 if (cacheIndex > (m_PrevCells.Count - 1))
                 {
                     m_PrevCells.Add(nextCells);
+                    //Debug.Log("Инициализация "+ i);
                 }
                 else
                 {
-                    Debug.Log("Сюда, теоретически, я не должен был попасть");
+                    //Debug.Log("Каждый кадр " + i);
                     m_PrevCells[cacheIndex].hashMap.Dispose();
                     m_PrevCells[cacheIndex].cellIndices.Dispose();
                     m_PrevCells[cacheIndex].cellObstaclePositionIndex.Dispose();
@@ -318,14 +323,17 @@ namespace Samples.Boids
                     m_PrevCells[cacheIndex].cellObstacleDistance.Dispose();
                     m_PrevCells[cacheIndex].cellCount.Dispose();
                 }
-                m_PrevCells[cacheIndex] = nextCells;//лишняя строчка - мы шагом ранее добавили уже ячейку
+                m_PrevCells[cacheIndex] = nextCells;
 
+                //первый Job
+                #region первый Job
                 var hashPositionsJob = new HashPositions
                 {
-                    hashMap        = hashMap.ToConcurrent(),
-                    cellRadius     = settings.cellRadius
+                    hashMap        = hashMap.ToConcurrent(), //передаем просто массив-"коробку", сам массив не инициализирован
+                    cellRadius     = settings.cellRadius // текущий тип боида - радиус ячейки 
                 };
                 var hashPositionsJobHandle = hashPositionsJob.ScheduleGroup(m_BoidGroup, inputDeps);
+                #endregion первый Job
 
                 var initialCellCountJob = new MemsetNativeArray<int>
                 {
