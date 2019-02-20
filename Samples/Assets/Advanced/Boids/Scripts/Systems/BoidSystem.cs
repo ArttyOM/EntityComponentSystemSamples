@@ -11,20 +11,26 @@ using Samples.Common;
 namespace Samples.Boids
 {
     /// <summary>
-    /// Самая сложная система в проекте
+    /// Самая сложная система в проекте, и сюда 99% логики засунули.
     /// </summary>
     public class BoidSystem : JobComponentSystem
     {
         //поля ComponentGroup проходят инициализацию в OnManagerStarted
-        //TODO - разобраться, метод вызывается до или после спавна рыбешек
-        //(чтобы понять, это постоянные рантайм-фильтры, либо все же конкретные компоненты единоразово туда попадают)
-        private ComponentGroup  m_BoidGroup; //коллекция компонентов рыбешек
+        /// <summary>
+        /// все рыбешки, присутствующие в игре на момент старта менеджера (TODO: или просто все рыбешки? Разобраться
+        /// </summary>
+        private ComponentGroup  m_BoidGroup;
         private ComponentGroup  m_TargetGroup;//коллекция компонентов "ведущих"
         private ComponentGroup  m_ObstacleGroup; //коллекция акул
 
-        private List<Boid>      m_UniqueTypes = new List<Boid>(10);//так, почему 10?
+        ///задел на 10 разных типов Boid - зачем оно тут?
+        private List<Boid>      m_UniqueTypes = new List<Boid>(10);
+
         private List<PrevCells> m_PrevCells   = new List<PrevCells>();
 
+        /// <summary>
+        /// вспомогательная структура
+        /// </summary>
         struct PrevCells
         {
             public NativeMultiHashMap<int, int> hashMap;
@@ -222,52 +228,85 @@ namespace Samples.Boids
 
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
-            EntityManager.GetAllUniqueSharedComponentData(m_UniqueTypes);
+            EntityManager.GetAllUniqueSharedComponentData(m_UniqueTypes);//типа подгружаем все возможные типы рыбок
 
-            var obstacleCount = m_ObstacleGroup.CalculateLength();
-            var targetCount = m_TargetGroup.CalculateLength();
+            var obstacleCount = m_ObstacleGroup.CalculateLength(); //считаем акул. У нас всегда obstacleCount == 1.
+            var targetCount = m_TargetGroup.CalculateLength(); //считаем ведущих. У нас всегда targetCount == 2/
 
             // Ingore typeIndex 0, can't use the default for anything meaningful.
-            for (int typeIndex = 1; typeIndex < m_UniqueTypes.Count; typeIndex++)
+            //поменял "typeIndex" на i - так привычнее
+            for (int i = 1; i < m_UniqueTypes.Count; i++)
             {
-                var settings = m_UniqueTypes[typeIndex];
-                m_BoidGroup.SetFilter(settings);
+                var settings = m_UniqueTypes[i];
+                m_BoidGroup.SetFilter(settings);//найдем все рыбешки, которые базируются на типе m_UniqyeTypes[i]
+                //рыбешки типа m_UniqyeTypes[0] не рассматриваются
 
-                var boidCount  = m_BoidGroup.CalculateLength();
+                var boidCount  = m_BoidGroup.CalculateLength();//посчитаем их
 
-                var cacheIndex                = typeIndex - 1;
+                var cacheIndex                = i - 1; // индексу i=[1 : Count) соотвествует cacheIndex [0 - Count-1)
+
+                ///создаем кучу массивов
+                /// boidCount - столько элементов int будет помещаться в массив - меняется в течение цикла
+                /// массив располагается в контейнере Allocator.TempJob (быстрый, но живет до 3х кадров)
+                /// NativeArrayOptions.UninitializedMemory - режим, когда мы не проверяем, что именно находится в каждой ячейке
+
+                //этот массив хранит ID ячеек рыбешек
                 var cellIndices               = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
-                var hashMap                   = new NativeMultiHashMap<int,int>(boidCount,Allocator.TempJob);
-                var cellObstacleDistance      = new NativeArray<float>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
-                var cellObstaclePositionIndex = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
-                var cellTargetPositionIndex   = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
-                var cellCount                 = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
 
+                //тут не массив, но хешмап. Занятно
+                var hashMap                   = new NativeMultiHashMap<int,int>(boidCount,Allocator.TempJob);
+
+                //этот массив хранит расстояния каждой рыбешки выбранного типа до акулы
+                //(TODO - разобраться, скорее всего, до ближайшей акулы, но из названия это не очевидно) 
+                var cellObstacleDistance      = new NativeArray<float>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
+
+                //у каждой рыбки может быть своя ближайшая акула - поэтому есть этот массив.
+                var cellObstaclePositionIndex = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
+
+                //у каждой рыбки при этом своя ведущая - в массив записан ID её ячейки
+                var cellTargetPositionIndex   = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
+                //у каждой рыбки свой cellCount - TODO - разобраться
+                var cellCount                 = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
+                
+                ///а теперь разбираем ComponentGroup на составные компоненты, которые пихаем в  массивы
+
+                //массив направлений рыбешек
                 var cellAlignment             = m_BoidGroup.ToComponentDataArray<Heading>(Allocator.TempJob, out var initialCellAlignmentJobHandle);
+                //массивы позиций рыбешек, ведущих и акул соответственно
                 var cellSeparation            = m_BoidGroup.ToComponentDataArray<Position>(Allocator.TempJob, out var initialCellSeparationJobHandle);
                 var copyTargetPositions       = m_TargetGroup.ToComponentDataArray<Position>(Allocator.TempJob, out var copyTargetPositionsJobHandle);
                 var copyObstaclePositions     = m_ObstacleGroup.ToComponentDataArray<Position>(Allocator.TempJob, out var copyObstaclePositionsJobHandle);
 
+                ///это структура => когда мы создаем её экземпляр, выделяем память и копируем все, что при инициализации использовалось
+                ///т.е.
                 var nextCells = new PrevCells
                 {
-                    cellIndices               = cellIndices,
-                    hashMap                   = hashMap,
-                    copyObstaclePositions     = copyObstaclePositions,
-                    copyTargetPositions       = copyTargetPositions,
-                    cellAlignment             = cellAlignment,
-                    cellSeparation            = cellSeparation,
-                    cellObstacleDistance      = cellObstacleDistance,
-                    cellObstaclePositionIndex = cellObstaclePositionIndex,
-                    cellTargetPistionIndex    = cellTargetPositionIndex,
-                    cellCount                 = cellCount
+                    //часть массивов не была проинициализирована, так что их копирование нужно только для выделения памяти
+                    //(или мы именно ссылки на массивы копируем, под ссылки память уже выделена? TODO - разобраться)
+                    cellIndices = cellIndices, //не инициализирован
+                    hashMap                   = hashMap,//не инициализирован           
+                    copyObstaclePositions     = copyObstaclePositions,//Ok
+                    copyTargetPositions       = copyTargetPositions,//Ok
+                    cellAlignment             = cellAlignment,//Ok
+                    cellSeparation            = cellSeparation,//Ok
+                    cellObstacleDistance      = cellObstacleDistance,//не инициализирован
+                    cellObstaclePositionIndex = cellObstaclePositionIndex,//не инициализирован
+                    cellTargetPistionIndex    = cellTargetPositionIndex,//не инициализирован
+                    cellCount                 = cellCount//не инициализирован
                 };
 
+                //Имеем сравнение i-1 с 0-1, i при этом на первом входе =1 и инкрементируется
+                //Лучше бы i начинали с 0, на мой взгляд - это во-первых
+                //а во-вторых - m_PrevCells.Add вызывается только здесь, cacheIndex только инкрементирует
+                //=> cacheIndex всегда больше m_PrevCells.Count-1,
+                //else никогда не выполнится (TODO - проверить)
                 if (cacheIndex > (m_PrevCells.Count - 1))
                 {
                     m_PrevCells.Add(nextCells);
                 }
                 else
                 {
+                    Debug.Log("Сюда, теоретически, я не должен был попасть");
                     m_PrevCells[cacheIndex].hashMap.Dispose();
                     m_PrevCells[cacheIndex].cellIndices.Dispose();
                     m_PrevCells[cacheIndex].cellObstaclePositionIndex.Dispose();
@@ -279,7 +318,7 @@ namespace Samples.Boids
                     m_PrevCells[cacheIndex].cellObstacleDistance.Dispose();
                     m_PrevCells[cacheIndex].cellCount.Dispose();
                 }
-                m_PrevCells[cacheIndex] = nextCells;
+                m_PrevCells[cacheIndex] = nextCells;//лишняя строчка - мы шагом ранее добавили уже ячейку
 
                 var hashPositionsJob = new HashPositions
                 {
@@ -344,7 +383,6 @@ namespace Samples.Boids
         {
             //кешируем сущности, содержащие одновременно Boid, Poistion, Heading
             //т.е. всх рыбешек
-            //я чуть-чуть другие методы использовал. По-моему, на Generic-ах читабельнее
             m_BoidGroup = GetComponentGroup(
                 ComponentType.ReadOnly(typeof(Boid)),
                 ComponentType.ReadOnly(typeof(Position)),

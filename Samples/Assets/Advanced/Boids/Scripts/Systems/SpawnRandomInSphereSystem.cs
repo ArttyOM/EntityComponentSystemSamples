@@ -9,6 +9,7 @@ namespace Samples.Common
 {
     /// <summary>
     /// тэкс, здесь мы без многопотока, т.к. нам всего 2 компонента ковырять - незачем JobSystem разворачивать.
+    /// кроме того, позиции генерации не должны совпадать - в параллели такое неудобно обеспечивать
     /// </summary>
     public class SpawnRandomInSphereSystem : ComponentSystem
     {
@@ -82,8 +83,6 @@ namespace Samples.Common
                         ///           public int spawnerIndex;
                         ///           public Entity sourceEntity;
                         ///           public float3 position;
-
-
 
                         spawnInstance.sourceEntity = entities[entityIndex]; //ок, кешируем, какая сущность создала этот объект
                         spawnInstance.spawnerIndex = sharedIndex; //ок, кешируем ID спавнера
