@@ -69,8 +69,7 @@ namespace Samples.Boids
 
         /// <summary>
         /// 3й Job в системе
-        /// ExecuteFirst - вызывается для каждого объекта
-        /// ExecuteNext
+        /// в систему попадают все рыбешки, ведущие и акулы 
         /// </summary>
         [BurstCompile]
         struct MergeCells : IJobNativeMultiHashMapMergedSharedKeyIndices //даже имена интерфейсов страшно читать
@@ -142,20 +141,24 @@ namespace Samples.Boids
 
             public void ExecuteFirst(int index)
             {
-                var position = cellSeparation[index].Value / cellCount[index];
+                var position = cellSeparation[index].Value / cellCount[index]; //так и не понял, на кой хрен нам cellCount и на кой черт он нужен.
+                //там по идее 1 записано.
 
                 int obstaclePositionIndex;
                 float obstacleDistance;
-                NearestPosition(obstaclePositions, position, out obstaclePositionIndex, out obstacleDistance);
+                NearestPosition(obstaclePositions, position, out obstaclePositionIndex, out obstacleDistance);//получаем расстояние до акулы
                 cellObstaclePositionIndex[index] = obstaclePositionIndex;
                 cellObstacleDistance[index]      = obstacleDistance;
+                //кешируем результат в массиве
 
+                
                 int targetPositionIndex;
                 float targetDistance;
                 NearestPosition(targetPositions, position, out targetPositionIndex, out targetDistance);
                 cellTargetPistionIndex[index] = targetPositionIndex;
+                //проворачиваем то же самое с ведущими
 
-                cellIndices[index] = index;
+                cellIndices[index] = index; //меняем значение 1 на индекс
             }
 
             public void ExecuteNext(int cellIndex, int index)
@@ -332,7 +335,7 @@ namespace Samples.Boids
                 }
                 m_PrevCells[cacheIndex] = nextCells;
 
-                //первый Job
+                //первый Job отвечает за преобразование позиции и cellRadius (параметр вместо коллайдера, по сути) - в хеш-таблицу
                 #region первый Job
                 var hashPositionsJob = new HashPositions
                 {
@@ -342,7 +345,7 @@ namespace Samples.Boids
                 var hashPositionsJobHandle = hashPositionsJob.ScheduleGroup(m_BoidGroup, inputDeps);
                 #endregion первый Job
 
-                //второй Job - работа из коробки "из коробки"
+                //второй Job - работа из коробки, выставляет cellCount каждой рыбки в 1.
                 // наткнулся на интересную статью https://habr.com/ru/post/272269/ - про memset
                 // с JobSystem она не связана
                 #region второй Job
@@ -357,6 +360,9 @@ namespace Samples.Boids
                 #endregion второй Job
 
                 //TODO - разобраться, как работают барьеры
+                //Рабочее предположение - .CombineDependencies что-то типа [FULL JOIN] в SQL
+                //в результате на вход подается список полей с ID сущностей, и уже только их обрабатывает Job.
+                //Если барьер явно не указан -> берется полный список ID сущностей (которые удовлетворяют условиям)
                 ///initialCellAlignmentJobHandle - тип JobHandle, вроде не привязан к конкретной работе,
                 ///но к нему существует зависимость - cellAlignment - массив направлений рыбешек
                 ///initialCellSeparationJobHandle - тип JobHandle, вроде не привязан к конкретной работе,
@@ -364,28 +370,39 @@ namespace Samples.Boids
                 ///initialCellCountJobHandle - привязан к работе, проставляющий "1" в массивcellCount,
                 ///но к нему нет моих inputDeps-зависимостей              
                 var initialCellBarrierJobHandle = JobHandle.CombineDependencies(initialCellAlignmentJobHandle, initialCellSeparationJobHandle, initialCellCountJobHandle);
-                //в результате получаем в inputDeps - массивы cellAlignment, cellSeparation (и, возможно, cellCount)
+                //в результате получаем в inputDeps - сущности, содержащие массивы cellAlignment, cellSeparation (и, возможно, cellCount)
 
                 var copyTargetObstacleBarrierJobHandle = JobHandle.CombineDependencies(copyTargetPositionsJobHandle, copyObstaclePositionsJobHandle);
                 var mergeCellsBarrierJobHandle = JobHandle.CombineDependencies(hashPositionsJobHandle, initialCellBarrierJobHandle, copyTargetObstacleBarrierJobHandle);
+                ///у нас типа 5 хендлов, чьи фильтры мы хотим объединить, но CombineDepencies не дает
+                ///результат фильтра mergeCellsBarrierJobHandle - все рыбешки, все Ведущие и все акулы
+     
+
+
 
                 //Третий Job
-               #region Третий Job
+                #region Третий Job
                 var mergeCellsJob = new MergeCells
                 {
                     cellIndices               = cellIndices,//массив индексов ячеек
-                    cellAlignment             = cellAlignment,
-                    cellSeparation            = cellSeparation,
+                    cellAlignment             = cellAlignment,//массив направления рыбешек
+                    cellSeparation            = cellSeparation,//массив позиций рыбешек
+
                     cellObstacleDistance      = cellObstacleDistance,
-                    cellObstaclePositionIndex = cellObstaclePositionIndex,
-                    cellTargetPistionIndex    = cellTargetPositionIndex,
-                    cellCount                 = cellCount,
-                    targetPositions           = copyTargetPositions,
-                    obstaclePositions         = copyObstaclePositions
+                    //этот массив хранит расстояния каждой рыбешки выбранного типа до акулы
+                    //(TODO - разобраться, скорее всего, до ближайшей акулы, но из названия это не очевидно)            
+
+                    cellObstaclePositionIndex = cellObstaclePositionIndex, //у каждой рыбки может быть своя ближайшая акула - поэтому есть этот массив.
+                    cellTargetPistionIndex    = cellTargetPositionIndex, //у каждой рыбешки свой ведущий
+                    cellCount                 = cellCount,///у каждой рыбки свой cellCount - TODO - разобраться
+
+                    targetPositions           = copyTargetPositions, ///массив позиций ведущих рыб
+                    obstaclePositions         = copyObstaclePositions ///массив  позиций акул
                 };
-                var mergeCellsJobHandle = mergeCellsJob.Schedule(hashMap,64,mergeCellsBarrierJobHandle);
+                var mergeCellsJobHandle = mergeCellsJob.Schedule(hashMap,64,mergeCellsBarrierJobHandle);//в параметрах - наш хешмап, до 64 потоков для обработки
                 #endregion Третий Job
 
+                #region Четвертый Job
                 var steerJob = new Steer
                 {
                     cellIndices               = nextCells.cellIndices,
@@ -401,9 +418,12 @@ namespace Samples.Boids
                     dt                        = Time.deltaTime,
                 };
                 var steerJobHandle = steerJob.ScheduleGroup(m_BoidGroup, mergeCellsJobHandle);
+                #endregion Четвертый Job
 
                 inputDeps = steerJobHandle;
                 m_BoidGroup.AddDependency(inputDeps);
+
+                //и вот тут наш for заканчивается
             }
             m_UniqueTypes.Clear();
 
