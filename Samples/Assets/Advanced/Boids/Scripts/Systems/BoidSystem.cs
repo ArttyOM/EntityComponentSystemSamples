@@ -67,6 +67,11 @@ namespace Samples.Boids
             }
         }
 
+        /// <summary>
+        /// 3й Job в системе
+        /// ExecuteFirst - вызывается для каждого объекта
+        /// ExecuteNext
+        /// </summary>
         [BurstCompile]
         struct MergeCells : IJobNativeMultiHashMapMergedSharedKeyIndices //даже имена интерфейсов страшно читать
         {
@@ -83,9 +88,11 @@ namespace Samples.Boids
             ///ID ячеек, на которых находятся Ведущие
             public NativeArray<int>                 cellTargetPistionIndex;
             ///количество ячеек - почему-то в коллекции.
-            public NativeArray<int>                 cellCount; 
-            [ReadOnly] public NativeArray<Position> targetPositions; //массив позиций Ведущих
-            [ReadOnly] public NativeArray<Position> obstaclePositions; //массив позиций Акул
+            public NativeArray<int>                 cellCount;
+            ///нередактируемый массив позиций Ведущих
+            [ReadOnly] public NativeArray<Position> targetPositions; 
+            ///нередактируемый массив позиций Акул
+            [ReadOnly] public NativeArray<Position> obstaclePositions; 
 
             /// <summary>
             /// void - походу для оптимальной работы BurstCompile
@@ -116,7 +123,7 @@ namespace Samples.Boids
                     var distance = math.lengthsq(position - targets[i].Value);
 
                     ///классический код выглядел бы так:
-                    //if (distance < nearestDistance
+                    //if (distance < nearestDistance)
                     //{
                     //nearestDistance = distance;
                     //nearestPostitionIndex = i;
@@ -255,7 +262,7 @@ namespace Samples.Boids
                 /// массив располагается в контейнере Allocator.TempJob (быстрый, но живет до 3х кадров)
                 /// NativeArrayOptions.UninitializedMemory - режим, когда мы не проверяем, что именно находится в каждой ячейке
 
-                //этот массив хранит ID ячеек рыбешек
+                ///этот массив хранит ID ячеек рыбешек
                 var cellIndices               = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
 
                 //тут не массив, но хешмап. Занятно
@@ -270,7 +277,7 @@ namespace Samples.Boids
 
                 //у каждой рыбки при этом своя ведущая - в массив записан ID её ячейки
                 var cellTargetPositionIndex   = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
-                //у каждой рыбки свой cellCount - TODO - разобраться
+                ///у каждой рыбки свой cellCount - TODO - разобраться
                 var cellCount                 = new NativeArray<int>(boidCount, Allocator.TempJob,NativeArrayOptions.UninitializedMemory);
                 
                 ///а теперь разбираем ComponentGroup на составные компоненты, которые пихаем в  массивы
@@ -335,20 +342,38 @@ namespace Samples.Boids
                 var hashPositionsJobHandle = hashPositionsJob.ScheduleGroup(m_BoidGroup, inputDeps);
                 #endregion первый Job
 
+                //второй Job - работа из коробки "из коробки"
+                // наткнулся на интересную статью https://habr.com/ru/post/272269/ - про memset
+                // с JobSystem она не связана
+                #region второй Job
                 var initialCellCountJob = new MemsetNativeArray<int>
                 {
-                    Source = cellCount,
-                    Value  = 1
+                    Source = cellCount, //передаем ссылку на неинициализированный массив
+                    Value  = 1 //при выполнении Job забиваем весь массив этим значением
                 };
-                var initialCellCountJobHandle = initialCellCountJob.Schedule(boidCount, 64, inputDeps);
+                /*задействуемдо 64 потоков при выполнении*/
+                //для каждой рыбки в списке заполняем cellCount[id_рыбки] = 1 
+                var initialCellCountJobHandle = initialCellCountJob.Schedule(boidCount, 64 , inputDeps);
+                #endregion второй Job
 
+                //TODO - разобраться, как работают барьеры
+                ///initialCellAlignmentJobHandle - тип JobHandle, вроде не привязан к конкретной работе,
+                ///но к нему существует зависимость - cellAlignment - массив направлений рыбешек
+                ///initialCellSeparationJobHandle - тип JobHandle, вроде не привязан к конкретной работе,
+                ///но к нему существует зависимость - cellSeparation - массив позиций рыбешек
+                ///initialCellCountJobHandle - привязан к работе, проставляющий "1" в массивcellCount,
+                ///но к нему нет моих inputDeps-зависимостей              
                 var initialCellBarrierJobHandle = JobHandle.CombineDependencies(initialCellAlignmentJobHandle, initialCellSeparationJobHandle, initialCellCountJobHandle);
+                //в результате получаем в inputDeps - массивы cellAlignment, cellSeparation (и, возможно, cellCount)
+
                 var copyTargetObstacleBarrierJobHandle = JobHandle.CombineDependencies(copyTargetPositionsJobHandle, copyObstaclePositionsJobHandle);
                 var mergeCellsBarrierJobHandle = JobHandle.CombineDependencies(hashPositionsJobHandle, initialCellBarrierJobHandle, copyTargetObstacleBarrierJobHandle);
 
+                //Третий Job
+               #region Третий Job
                 var mergeCellsJob = new MergeCells
                 {
-                    cellIndices               = cellIndices,
+                    cellIndices               = cellIndices,//массив индексов ячеек
                     cellAlignment             = cellAlignment,
                     cellSeparation            = cellSeparation,
                     cellObstacleDistance      = cellObstacleDistance,
@@ -359,6 +384,7 @@ namespace Samples.Boids
                     obstaclePositions         = copyObstaclePositions
                 };
                 var mergeCellsJobHandle = mergeCellsJob.Schedule(hashMap,64,mergeCellsBarrierJobHandle);
+                #endregion Третий Job
 
                 var steerJob = new Steer
                 {
